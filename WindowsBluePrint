@@ -1,0 +1,185 @@
+#formatVersion: 1
+inputs:
+  image:
+    type: string
+    enum:
+      - Windows Server 2016 Standard
+      - Windows Server 2016 Standard Cloudinit
+    description: Template image
+    title: Select image
+    default: Windows Server 2016 Standard Cloudinit
+  size:
+    type: string
+    enum:
+      - Small-1x4CPU-8GB
+      - Small-2x8CPU-8GB
+      - Medium-1x8CPU-16GB
+      - Medium-2x16CPU-16GB
+    description: Size of Nodes
+    title: App Tier Size
+    default: Medium-2x16CPU-16GB
+  network:
+    type: string
+    enum:
+      - 'network:vlan113'
+      - 'network:vlan114'
+      - 'network:vlan14'
+    description: Select network
+    title: Network
+    default: 'network:vlan14'
+  hostname:
+    type: string
+    minLength: 4
+    maxLength: 20
+    pattern: '[a-z0-9]+'
+    title: Server hostname
+    description: Server hostname
+    default: w2016-cinit-
+  username:
+    type: string
+    pattern: '[a-z0-9A-Z]+'
+    title: Login Account
+    description: Login Account
+    default: tuanphan
+  userpassword:
+    type: string
+    pattern: '[a-z0-9A-Z@#$]+'
+    encrypted: true
+    title: Login Password
+    description: Login Password
+    default: '#123abc#'
+  disks:
+    type: array
+    title: Data Disk
+    items:
+      title: disk
+      type: object
+      properties:
+        size:
+          type: integer
+          title: Disk Capacity
+    maxItems: 15
+resources:
+  Windows_Server_Network_1:
+    type: Cloud.Network
+    properties:
+      networkType: existing
+      constraints:
+        - tag: 'vcenter:vc01'
+        - tag: 'site:dc'
+        - tag: '${input.network}'
+        - tag: 'networktype:distributed'
+  Windows_Server_Machine_1:
+    type: Cloud.Machine
+    properties:
+      name: Windows_Server_Machine_1
+      image: '${input.image}'
+      flavor: '${input.size}'
+      networks:
+        - network: '${resource.Windows_Server_Network_1.id}'
+          deviceIndex: 0
+          assignment: static
+          securityGroups: []
+      attachedDisks: '${map_to_object(resource.Windows_Server_Disk_1[*].id, "source")}'
+      constraints:
+        - tag: 'site:dc'
+        - tag: 'cloudzone:vc01'
+        - tag: 'server:blade'
+        - tag: 'host:esx316'
+      cloneStrategy: FULL
+      folderName: 'PCLOUD_VMs\${env.projectName}'
+      remoteAccess:
+        authentication: usernamePassword
+        username: Administrator
+        password: '#123abc#'
+      cloudConfig: |
+        Content-Type: multipart/mixed; boundary="===123456789"
+        MIME-Version: 1.0
+        --===123456789
+        Content-Type: text/cloud-config; charset="us-ascii"
+        MIME-Version: 1.0
+        Content-Transfer-Encoding: 7bit
+        Content-Disposition: attachment; filename="cloud-config"
+        #cloud_config
+        write_files:
+          content: Cloudbase-Init test
+          path: C:\test.txt
+        set_hostname: '${input.hostname}'
+
+        users:
+        -
+          name: '${input.username}'
+          passwd: '${input.userpassword}'
+          primary_group: Users
+          groups: Administrators
+          inactive: False
+        groups:
+        - cloud-users: ['${input.username}']
+        ntp:
+          enabled: True
+          servers: ['10.72.28.200', '10.72.28.201']
+        --===123456789
+        Content-Type: text/x-shellscript; charset="us-ascii"
+        MIME-Version: 1.0
+        Content-Transfer-Encoding: 7bit
+        Content-Disposition: attachment; filename="doPsStuff.ps1"
+        #ps1_sysnative
+        Set-Timezone -Id "SE Asia Standard Time"
+        sleep 1
+        $cd = $NULL
+        $cd = Get-WMIObject -Class Win32_CDROMDrive -ComputerName $env:COMPUTERNAME -ErrorAction Stop
+        if ($cd.Drive -eq "D:")
+        {
+           Set-WmiInstance -InputObject ( Get-WmiObject -Class Win32_volume -Filter "DriveLetter = 'd:'" ) -Arguments @{DriveLetter='z:'}
+        }
+        Get-Process | Out-File -FilePath "c:\process1.txt"
+        $alph=@()
+        65..90|foreach-object{$alph+=[char]$_}
+        sleep 5
+        $disk = Get-Disk
+        $disklength  = $disk.Length
+        foreach ($d in $disk) {
+            $disknumber = $d.Number.ToString()
+            if(([int]$disknumber -ne 0) -and ([int]$disknumber -lt [int]$disklength)) {
+                $raw = Get-Disk -Number $disknumber
+                if ($raw.PartitionStyle -eq 'RAW') {
+                    Get-Disk -Number $disknumber | Initialize-Disk -PartitionStyle MBR -PassThru | New-Partition -AssignDriveLetter -UseMaximumSize | Format-Volume -FileSystem NTFS -Confirm:$false
+                    sleep 5
+                }
+                $diskletternumber = [int]$disknumber + 2
+                $diskletter = $alph[$diskletternumber]
+                Get-Partition -DiskNumber $disknumber | Set-Partition -NewDriveLetter $diskletter
+            }
+        }
+        Get-Process | Out-File -FilePath "c:\process2.txt"
+        sleep 5
+        $domain = "dc.vn"
+        Get-Process | Out-File -FilePath "c:\process3.txt"
+        $pw = "#123Abc#" | ConvertTo-SecureString -asPlainText –Force
+        Get-Process | Out-File -FilePath "c:\process4.txt"
+        $usr = "$domain\tuanpa2"
+        Get-Process | Out-File -FilePath "c:\process5.txt"
+        $credential  = New-Object System.Management.Automation.PSCredential($usr,$pw)
+        Get-Process | Out-File -FilePath "c:\process6.txt"
+        $oupath = "OU=PCLOUD,DC=dc,DC=vn"
+        Get-Process | Out-File -FilePath "c:\process7.txt"
+        sleep 60
+        Add-Computer -DomainName $domain -Credential $credential -OUPath $oupath  -Force -Verbose -PassThru | Out-File "c:\joinad.txt"
+        Get-Process | Out-File -FilePath "c:\process8.txt"
+        sleep 5
+        Get-Process | Out-File -FilePath "c:\process.txt"
+        sleep 5
+        Restart-Computer -Delay 2
+        Get-Process | Out-File -FilePath "c:\process9.txt"
+      snapshotLimit: 5
+  Windows_Server_Disk_1:
+    type: Cloud.Volume
+    allocatePerInstance: true
+    properties:
+      name: Windows_Server_Disk_1
+      capacityGb: '${input.disks[count.index].size}'
+      count: '${length(input.disks)}'
+      constraints:
+        - tag: 'site:dc'
+        - tag: 'vcenter:vc01'
+        - tag: 'datastore:3par02_cloud01'
