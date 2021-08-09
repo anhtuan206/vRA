@@ -1,0 +1,171 @@
+#formatVersion: 1
+inputs:
+  image:
+    type: string
+    enum:
+      - Windows Server 2016 Standard
+      - Windows Server 2016 Standard Cloudinit
+    description: Template image
+    title: Select image
+    default: Windows Server 2016 Standard Cloudinit
+  size:
+    type: string
+    enum:
+      - Small-1x4CPU-8GB
+      - Small-2x8CPU-8GB
+      - Medium-1x8CPU-16GB
+      - Medium-2x16CPU-16GB
+    description: Size of Nodes
+    title: App Tier Size
+    default: Medium-2x16CPU-16GB
+  network:
+    type: string
+    enum:
+      - 'network:vlan113'
+      - 'network:vlan114'
+      - 'network:vlan14'
+    description: Select network
+    title: Network
+    default: 'network:vlan14'
+  hostname:
+    type: string
+    minLength: 4
+    maxLength: 20
+    pattern: '[a-z0-9]+'
+    title: Server hostname
+    description: Server hostname
+    default: w2016-cinit-
+  username:
+    type: string
+    pattern: '[a-z0-9A-Z]+'
+    title: Login Account
+    description: Login Account
+    default: tuanphan
+  userpassword:
+    type: string
+    pattern: '[a-z0-9A-Z@#$]+'
+    encrypted: true
+    title: Login Password
+    description: Login Password
+    default: StrongPassw0rd
+  databaseDiskSize:
+    type: number
+    default: 50
+    maximum: 200
+    title: Data Disk Size
+    description: Size of data disk
+resources:
+  Windows_Server_Network_1:
+    type: Cloud.Network
+    properties:
+      networkType: existing
+      constraints:
+        - tag: 'vcenter:vc01'
+        - tag: 'site:dc'
+        - tag: '${input.network}'
+        - tag: 'networktype:distributed'
+  Windows_Server_Machine_1:
+    type: Cloud.Machine
+    properties:
+      name: Windows_Server_Machine_1
+      image: '${input.image}'
+      flavor: '${input.size}'
+      networks:
+        - network: '${resource.Windows_Server_Network_1.id}'
+          deviceIndex: 0
+          assignment: static
+      attachedDisks:
+        - source: '${resource.Windows_Server_Disk_1.id}'
+      constraints:
+        - tag: 'site:dc'
+        - tag: 'cloudzone:vc01'
+        - tag: 'server:blade'
+        - tag: 'host:esx316'
+      cloneStrategy: FULL
+      folderName: 'PCLOUD_VMs\${env.projectName}'
+      remoteAccess:
+        authentication: usernamePassword
+        username: Administrator
+        password: R3mote@Access
+      cloudConfig: |
+        Content-Type: multipart/mixed; boundary="===123456789"
+        MIME-Version: 1.0
+        --===123456789
+        Content-Type: text/cloud-config; charset="us-ascii"
+        MIME-Version: 1.0
+        Content-Transfer-Encoding: 7bit
+        Content-Disposition: attachment; filename="cloud-config"
+        write_files:
+          content: Cloudbase-Init test
+          path: C:\test.txt
+        set_hostname: '${input.hostname}'
+
+        users:
+        -
+          name: '${input.username}'
+          passwd: '${input.userpassword}'
+          primary_group: Users
+          groups: Administrators
+          inactive: False
+        groups:
+        - cloud-users: ['${input.username}']
+        ntp:
+          enabled: True
+          servers: ['10.72.28.200', '10.72.28.201']
+        --===123456789
+        Content-Type: text/x-shellscript; charset="us-ascii"
+        MIME-Version: 1.0
+        Content-Transfer-Encoding: 7bit
+        Content-Disposition: attachment; filename="doPsStuff.ps1"
+        #ps1_sysnative
+        Set-Timezone -Id "SE Asia Standard Time"
+        sleep 1
+        $cd = $NULL
+        $cd = Get-WMIObject -Class Win32_CDROMDrive -ComputerName $env:COMPUTERNAME -ErrorAction Stop
+        if ($cd.Drive -eq "D:")
+        {
+           Set-WmiInstance -InputObject ( Get-WmiObject -Class Win32_volume -Filter "DriveLetter = 'd:'" ) -Arguments @{DriveLetter='z:'}
+        }
+
+        $alph=@()
+        65..90|foreach-object{$alph+=[char]$_}
+        #$alph
+
+        sleep 5
+        $disk = Get-Disk
+        $disklength  = $disk.Length
+        foreach ($d in $disk) {
+            $disknumber = $d.Number.ToString()
+            Write-Output "Disknumber: $disknumber"
+            if(([int]$disknumber -ne 0) -and ([int]$disknumber -lt [int]$disklength)) {
+                Write-Output "Processing Disknumber: $disknumber"
+                $raw = Get-Disk -Number $disknumber
+                if ($raw.PartitionStyle -eq 'RAW') {
+                    Write-Output "Processing RAW disk: $disknumber"
+                    Get-Disk -Number $disknumber | Initialize-Disk -PartitionStyle MBR -PassThru | New-Partition -AssignDriveLetter -UseMaximumSize | Format-Volume -FileSystem NTFS -Confirm:$false
+                    sleep 5
+                }
+                $diskletternumber = [int]$disknumber + 2
+                $diskletter = $alph[$diskletternumber]
+                Get-Partition -DiskNumber $disknumber | Set-Partition -NewDriveLetter $diskletter
+            }
+        }
+        
+        sleep 5
+        $dc = "DC.VN"
+        $pw = "Evncpc@2021#" | ConvertTo-SecureString -asPlainText –Force
+        $usr = "$dc\vid"
+        $creds = New-Object System.Management.Automation.PSCredential($usr,$pw)
+        $OU = "OU=PCLOUD,DC=dc,DC=vn"
+        Add-Computer -DomainName $dc -OUPath $OU -Credential $creds -restart -force -verbose
+      snapshotLimit: 5
+  Windows_Server_Disk_1:
+    type: Cloud.Volume
+    properties:
+      name: Windows_Server_Disk_1
+      capacityGb: '${input.databaseDiskSize}'
+      maxDiskCapacityInGB: 200
+      constraints:
+        - tag: 'site:dc'
+        - tag: 'vcenter:vc01'
+        - tag: 'datastore:3par02_cloud01'
