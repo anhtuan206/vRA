@@ -1,0 +1,136 @@
+#formatVersion: 1
+inputs:
+  image:
+    type: string
+    enum:
+      - Centos 8
+    description: Chọn phiên bản hệ điều hành
+    title: Select OS
+    default: Centos 8
+  size:
+    type: string
+    oneOf:
+      - title: 'Small 1 (4 Cores Cpu, 8GB Memory)'
+        const: Small-1x4CPU-8GB
+      - title: 'Small 2 (8 Cores Cpu, 8GB Memory)'
+        const: Small-2x8CPU-8GB
+      - title: 'Medium 1 (8 Cores Cpu, 16GB Memory'
+        const: Medium-1x8CPU-16GB
+      - title: 'Medium 2 (16 Cores Cpu, 16GB Memory)'
+        const: Medium-2x16CPU-16GB
+    description: Chọn tài nguyên cho máy chủ
+    title: Resource Size
+    default: Small-2x8CPU-8GB
+  network:
+    type: string
+    oneOf:
+      - title: Application Network (10.72.113.0/24)
+        const: 'network:vlan113'
+      - title: Database Network (10.72.114.0/24)
+        const: 'network:vlan114'
+    description: Chọn lớp mạng được gán cho máy chủ
+    title: Network
+    default: 'network:vlan113'
+  hostname:
+    type: string
+    minLength: 4
+    maxLength: 15
+    pattern: '[a-z0-9A-Z]+'
+    title: Server hostname
+    description: 'Tên máy chủ được thiết lập trong phần Computer Name. Vd: DEMO-EOFFICE-FILE01'
+  username:
+    type: string
+    pattern: '^[a-z0-9A-Z]+$'
+    title: Login Account
+    description: Tài khoản đăng nhập máy chủ
+    minLength: 6
+    maxLength: 20
+  userpassword:
+    type: string
+    #pattern: '^[a-z0-9A-Z@#$]+$'
+    pattern: '(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[^A-Za-z0-9])(?=.{8,})'
+    encrypted: true
+    title: Login Password
+    description: Thiết lập mật khẩu cho tài khoản đăng nhập máy chủ
+    minLength: 6
+  disks:
+    type: array
+    title: Data Disk
+    items:
+      title: disk
+      type: object
+      properties:
+        size:
+          type: integer
+          title: Disk Capacity (GB)
+    maxItems: 5
+    description: Chọn số lượng đĩa. Tối đa 5 đĩa
+resources:
+  Server_Network:
+    type: Cloud.vSphere.Network
+    properties:
+      name: 'PCLOUD-${to_upper(input.hostname)}-NETWORK'
+      networkType: existing
+      constraints:
+        - tag: 'vcenter:vc01'
+        - tag: 'site:dc'
+        - tag: '${input.network}'
+        - tag: 'networktype:distributed'
+  Server_Machine:
+    type: Cloud.vSphere.Machine
+    properties:
+      name: 'PCLOUD-${to_upper(input.hostname)}-MACHINE'
+      hostname: '${to_upper(input.hostname)}'
+      image: '${input.image}'
+      flavor: '${input.size}'
+      attachedDisks: '${map_to_object(resource.Server_Disk[*].id, "source")}'
+      tags:
+        - key: requestedBy
+          value: '${env.requestedBy}'
+        - key: projectName
+          value: '${env.projectName}'
+        - key: requestedAt
+          value: '${env.requestedAt}'
+        - key: deploymentName
+          value: '${env.deploymentName}'
+      constraints:
+        - tag: 'site:dc'
+        - tag: 'cloudzone:vc01'
+        - tag: 'server:blade'
+        - tag: 'host:esx316'
+      cloneStrategy: FULL
+      folderName: 'PCLOUD_VMs\${env.projectName}'
+      customizeGuestOs: true
+      cloudConfig: |
+        #cloud-config
+        users:
+          - name: ${input.username}
+            lock_passwd: false
+            sudo: ['ALL=(ALL) NOPASSWD:ALL']
+            groups: [wheel,users]
+            ssh_pwauth: True
+            shell: '/bin/bash'
+        chpasswd:
+          list: |
+            ${input.username}:${input.userpassword}
+            root:Str0ngPassw0rd
+            pcloudadmin:Str0ngPassw0rd
+          expire: false
+        runcmd:
+          - echo "Defaults:${input.username} !requiretty" >> /etc/sudoers.d/${input.username}
+      snapshotLimit: 5
+      networks:
+        - network: '${resource.Server_Network.id}'
+          deviceIndex: 0
+          assignment: static
+  Server_Disk:
+    type: Cloud.vSphere.Disk
+    allocatePerInstance: true
+    properties:
+      name: 'PCLOUD-${to_upper(input.hostname)}-DISK${count.index}'
+      capacityGb: '${input.disks[count.index].size}'
+      count: '${length(input.disks)}'
+      constraints:
+        - tag: 'site:dc'
+        - tag: 'vcenter:vc01'
+        - tag: 'datastore:3par02_cloud01'
