@@ -1,0 +1,251 @@
+#formatVersion: 1
+inputs:
+  image:
+    type: string
+    enum:
+      - 'Windows Server 2016 Standard'
+    description: 'Chọn phiên bản hệ điều hành'
+    title: Select OS
+    default: 'Windows Server 2016 Standard'
+  size:
+    type: string
+    oneOf:
+      - title: 'Small 1 (4 Cores Cpu, 8GB Memory)'
+        const: Small-1x4CPU-8GB
+      - title: 'Small 2 (8 Cores Cpu, 8GB Memory)'
+        const: Small-2x8CPU-8GB
+      - title: 'Medium 1 (8 Cores Cpu, 16GB Memory'
+        const: Medium-1x8CPU-16GB
+      - title: 'Medium 2 (16 Cores Cpu, 16GB Memory)'
+        const: Medium-2x16CPU-16GB
+    description: Chọn gói tài nguyên cho máy chủ
+    title: Resource size
+    default: 'Small-2x8CPU-8GB'
+  network:
+    type: string
+    oneOf:
+      - title: 'Application Network (10.72.113.0/24)'
+        const: 'network:vlan113'
+      - title: 'Database Network (10.72.114.0/24)'
+        const: 'network:vlan114'
+    description: 'Chọn lớp mạng được gán cho máy chủ'
+    title: Network
+    default: 'network:vlan113'
+  hostname:
+    type: string
+    minLength: 4
+    maxLength: 15
+    pattern: '[a-z0-9A-Z]+'
+    title: Server hostname
+    description: 'Tên máy chủ được thiết lập trong phần Computer Name. Vd: DEMO-EOFFICE-FILE01'
+  username:
+    type: string
+    pattern: '^[a-z0-9A-Z]+$'
+    title: Login Account
+    description: 'Tài khoản đăng nhập máy chủ (console, rdp)'
+    minLength: 6
+    maxLength: 20
+  userpassword:
+    type: string
+    #pattern: '^[a-z0-9A-Z@#$]+$'
+    pattern: '(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[^A-Za-z0-9])(?=.{8,})'
+    encrypted: true
+    title: Login Password
+    description: 'Thiết lập mật khẩu cho tài khoản đăng nhập máy chủ.'
+    minLength: 6
+  disks:
+    type: array
+    title: Data Disk
+    items:
+      title: Disks
+      type: object
+      properties:
+        mountpoint:
+          type: string
+          title: Disk Label
+          enum:
+            - D
+            - E
+            - F
+            - G
+            - H
+        size:
+          type: integer
+          title: Disk Capacity (GB)
+    maxItems: 5
+    description: 'Đĩa chứa OS (đĩa C) có sẵn dung lượng 60GB. Bạn có thể thêm tối đa 5 đĩa. Vui lòng thêm theo thứ tự của mount point (D,E...) hoặc đĩa sẽ được khởi tạo theo thứ tự từ trên xuống & được gắn vào các mount point theo thứ tự định sẵn (D,E...)'
+resources:
+  Windows_Server_Network:
+    type: Cloud.vSphere.Network
+    properties:
+      networkType: existing
+      constraints:
+        - tag: 'vcenter:vc01'
+        - tag: 'site:dc'
+        - tag: '${input.network}'
+        - tag: 'networktype:distributed'
+  Windows_Server_Machine:
+    type: Cloud.vSphere.Machine
+    properties:
+      name: 'PCLOUD-${to_upper(input.hostname)}'
+      hostname: '${to_upper(input.hostname)}'
+      image: '${input.image}'
+      flavor: '${input.size}'
+      networks:
+        - network: '${resource.Windows_Server_Network.id}'
+          deviceIndex: 0
+          assignment: static
+      attachedDisks: '${map_to_object(resource.Server_Disk1[*].id + resource.Server_Disk2[*].id + resource.Server_Disk3[*].id + resource.Server_Disk4[*].id + resource.Server_Disk5[*].id, "source")}'
+      tags:
+        - key: requestedBy
+          value: '${env.requestedBy}'
+        - key: projectName
+          value: '${env.projectName}'
+        - key: requestedAt
+          value: '${env.requestedAt}'
+        - key: deploymentName
+          value: '${env.deploymentName}'
+      constraints:
+        - tag: 'site:dc'
+        - tag: 'cloudzone:vc01'
+        - tag: 'server:blade'
+        - tag: 'host:esx316'
+      cloneStrategy: FULL
+      folderName: 'PCLOUD_VMs\${env.projectName}'
+      #remoteAccess:
+      #password: Danang@2021#
+      cloudConfig: |
+        Content-Type: multipart/mixed; boundary="===123456789"
+        MIME-Version: 1.0
+        --===123456789
+        Content-Type: text/cloud-config; charset="us-ascii"
+        MIME-Version: 1.0
+        Content-Transfer-Encoding: 7bit
+        Content-Disposition: attachment; filename="cloud-config"
+        #cloud_config
+        set_hostname: '${resource.Windows_Server_Machine.hostname}'
+        runcmd:
+        - 'netdom join ${resource.Windows_Server_Machine.hostname} /d:dc.vn /OU:OU=PCLOUD,DC=dc,DC=vn /ud:vid@dc.vn /pd:${secret.JoinDomainPassword}  /reboot'
+        users:
+        -
+          name: '${input.username}'
+          passwd: '${input.userpassword}'
+          primary_group: Users
+          groups: Administrators
+          inactive: False
+        -
+          name: Administrator
+          passwd: '${secret.WindowsServerTemplateAdministratorPassword}'
+        groups:
+        - cloud-users: ['${input.username}']
+        ntp:
+          enabled: True
+          servers: ['10.72.28.200', '10.72.28.201']
+        --===123456789
+        Content-Type: text/x-shellscript; charset="us-ascii"
+        MIME-Version: 1.0
+        Content-Transfer-Encoding: 7bit
+        Content-Disposition: attachment; filename="doPsStuff.ps1"
+        #ps1_sysnative
+        Set-Timezone -Id "SE Asia Standard Time"
+        sleep 1
+        $cd = $NULL
+        $cd = Get-WMIObject -Class Win32_CDROMDrive -ComputerName $env:COMPUTERNAME -ErrorAction Stop
+        if ($cd.Drive -eq "D:")
+        {
+           Set-WmiInstance -InputObject ( Get-WmiObject -Class Win32_volume -Filter "DriveLetter = 'd:'" ) -Arguments @{DriveLetter='z:'}
+        }
+        Get-Process | Out-File -FilePath "c:\process1.txt"
+        $alph=@()
+        65..90|foreach-object{$alph+=[char]$_}
+        sleep 5
+        $disk = Get-Disk
+        $disklength  = $disk.Length
+        foreach ($d in $disk) {
+            $disknumber = $d.Number.ToString()
+            if(([int]$disknumber -ne 0) -and ([int]$disknumber -lt [int]$disklength)) {
+                $raw = Get-Disk -Number $disknumber
+                if ($raw.PartitionStyle -eq 'RAW') {
+                    Get-Disk -Number $disknumber | Initialize-Disk -PartitionStyle MBR -PassThru | New-Partition -AssignDriveLetter -UseMaximumSize | Format-Volume -FileSystem NTFS -Confirm:$false
+                    sleep 5
+                }
+                $diskletternumber = [int]$disknumber + 2
+                $diskletter = $alph[$diskletternumber]
+                Get-Partition -DiskNumber $disknumber | Set-Partition -NewDriveLetter $diskletter
+            }
+        }
+        Remove-Item -Path 'C:\Program Files\Cloudbase Solution\Cloudbase-Init\log\' -Recurse -Force
+      snapshotLimit: 5
+  Server_Disk1:
+    type: Cloud.vSphere.Disk
+    allocatePerInstance: true
+    properties:
+      unitNumber: 1
+      capacityGb: '${input.disks[0].size}'
+      constraints:
+        - tag: 'site:dc'
+        - tag: 'vcenter:vc01'
+        - tag: 'datastore:3par02_cloud01'
+      count: '${ length(input.disks) >= 1 ? 1 : 0 }'
+      name: 'PCLOUD-${to_upper(input.hostname)}-DISK1'
+      SCSIController: SCSI_Controller_0
+  Server_Disk2:
+    type: Cloud.vSphere.Disk
+    dependsOn:
+      - Server_Disk1
+    allocatePerInstance: true
+    properties:
+      unitNumber: 2
+      SCSIController: SCSI_Controller_0
+      capacityGb: '${input.disks[1].size}'
+      count: '${ length(input.disks) >= 2 ? 1 : 0 }'
+      name: 'PCLOUD-${to_upper(input.hostname)}-DISK2'
+      constraints:
+        - tag: 'site:dc'
+        - tag: 'vcenter:vc01'
+        - tag: 'datastore:3par02_cloud01'
+  Server_Disk3:
+    type: Cloud.vSphere.Disk
+    dependsOn:
+      - Server_Disk2
+    allocatePerInstance: true
+    properties:
+      unitNumber: 3
+      SCSIController: SCSI_Controller_0
+      capacityGb: '${input.disks[2].size}'
+      count: '${ length(input.disks) >= 3 ? 1 : 0 }'
+      name: 'PCLOUD-${to_upper(input.hostname)}-DISK3'
+      constraints:
+        - tag: 'site:dc'
+        - tag: 'vcenter:vc01'
+        - tag: 'datastore:3par02_cloud01'
+  Server_Disk4:
+    type: Cloud.vSphere.Disk
+    dependsOn:
+      - Server_Disk3
+    allocatePerInstance: true
+    properties:
+      unitNumber: 4
+      SCSIController: SCSI_Controller_0
+      capacityGb: '${input.disks[3].size}'
+      count: '${ length(input.disks) >= 4 ? 1 : 0 }'
+      name: 'PCLOUD-${to_upper(input.hostname)}-DISK4'
+      constraints:
+        - tag: 'site:dc'
+        - tag: 'vcenter:vc01'
+        - tag: 'datastore:3par02_cloud01'
+  Server_Disk5:
+    type: Cloud.vSphere.Disk
+    dependsOn:
+      - Server_Disk4
+    allocatePerInstance: true
+    properties:
+      unitNumber: 5
+      SCSIController: SCSI_Controller_0
+      capacityGb: '${input.disks[4].size}'
+      count: '${ length(input.disks) >= 5 ? 1 : 0 }'
+      name: 'PCLOUD-${to_upper(input.hostname)}-DISK5'
+      constraints:
+        - tag: 'site:dc'
+        - tag: 'vcenter:vc01'
+        - tag: 'datastore:3par02_cloud01'
