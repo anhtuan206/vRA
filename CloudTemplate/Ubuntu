@@ -1,0 +1,275 @@
+#formatVersion: 1
+inputs:
+  image:
+    type: string
+    enum:
+      - Ubuntu 20.04.1 LTS
+      - Ubuntu 18.04.5
+    description: Chọn phiên bản hệ điều hành
+    title: Select OS
+    default: Ubuntu 20.04.1 LTS
+  size:
+    type: string
+    oneOf:
+      - title: 'Small 1 (4 Cores Cpu, 8GB Memory)'
+        const: Small-1x4CPU-8GB
+      - title: 'Small 2 (8 Cores Cpu, 8GB Memory)'
+        const: Small-2x8CPU-8GB
+      - title: 'Medium 1 (8 Cores Cpu, 16GB Memory'
+        const: Medium-1x8CPU-16GB
+      - title: 'Medium 2 (16 Cores Cpu, 16GB Memory)'
+        const: Medium-2x16CPU-16GB
+    description: Chọn tài nguyên cho máy chủ
+    title: Resource Size
+    default: Small-2x8CPU-8GB
+  network:
+    type: string
+    oneOf:
+      - title: Application Network (10.72.113.0/24)
+        const: 'network:vlan113'
+      - title: Database Network (10.72.114.0/24)
+        const: 'network:vlan114'
+    description: Chọn lớp mạng được gán cho máy chủ
+    title: Network
+    default: 'network:vlan113'
+  hostname:
+    type: string
+    minLength: 4
+    maxLength: 15
+    pattern: '[a-z0-9A-Z]+'
+    title: Server hostname
+    description: 'Tên máy chủ được thiết lập trong phần Computer Name. Vd: DEMO-EOFFICE-FILE01'
+  username:
+    type: string
+    pattern: '^[a-z0-9A-Z]+$'
+    title: Login Account
+    description: Tài khoản đăng nhập máy chủ
+    minLength: 6
+    maxLength: 20
+  userpassword:
+    type: string
+    #pattern: '^[a-z0-9A-Z@#$]+$'
+    pattern: '(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[^A-Za-z0-9])(?=.{8,})'
+    encrypted: true
+    title: Login Password
+    description: Thiết lập mật khẩu cho tài khoản đăng nhập máy chủ
+    minLength: 6
+  disks:
+    type: array
+    title: Data Disk
+    items:
+      title: Disks
+      type: object
+      properties:
+        mountpoint:
+          type: string
+          title: Mount Point
+          enum:
+            - /data1
+            - /data2
+            - /data3
+            - /data4
+            - /data5
+        size:
+          type: integer
+          title: Disk Capacity (GB)
+    maxItems: 5
+    description: Chọn số lượng đĩa. Tối đa 5 đĩa
+resources:
+  Server_Network:
+    type: Cloud.vSphere.Network
+    properties:
+      networkType: existing
+      constraints:
+        - tag: 'vcenter:vc01'
+        - tag: 'site:dc'
+        - tag: '${input.network}'
+        - tag: 'networktype:distributed'
+  Server_Machine:
+    type: Cloud.vSphere.Machine
+    properties:
+      name: 'PCLOUD-${to_upper(input.hostname)}'
+      hostname: '${input.hostname}'
+      image: '${input.image}'
+      flavor: '${input.size}'
+      attachedDisks: '${map_to_object(resource.Server_Disk1[*].id + resource.Server_Disk2[*].id + resource.Server_Disk3[*].id + resource.Server_Disk4[*].id + resource.Server_Disk5[*].id, "source")}'
+      tags:
+        - key: requestedBy
+          value: '${env.requestedBy}'
+        - key: projectName
+          value: '${env.projectName}'
+        - key: requestedAt
+          value: '${env.requestedAt}'
+        - key: deploymentName
+          value: '${env.deploymentName}'
+      constraints:
+        - tag: 'site:dc'
+        - tag: 'cloudzone:vc01'
+        - tag: 'server:blade'
+        - tag: 'host:esx316'
+      cloneStrategy: FULL
+      folderName: 'PCLOUD_VMs\${env.projectName}'
+      customizeGuestOs: false
+      cloudConfig: |
+        #cloud-config
+        write_files:
+        - path: /var/tmp/initdisk.sh
+          permissions: '0755'
+          content: |
+            #!/bin/bash
+            ls /dev/ | grep sd | grep -v sda > /var/tmp/disk.txt
+            cat /var/tmp/disk.txt | while read line; do
+                if [ $line == 'sdb' ]
+                then
+                    mkdir /data1
+                    echo -e "g\nn\np\n1\n\n\nw" | fdisk /dev/sdb
+                    mkfs.ext4 /dev/sdb1
+                    mount /dev/sdb1 /data1
+                    echo "/dev/sdb1 /data1 ext4 defaults 0 0" >> /etc/fstab
+                fi
+                if [ $line == 'sdc' ]
+                then
+                    mkdir /data2
+                    echo -e "g\nn\np\n1\n\n\nw" | fdisk /dev/sdc
+                    mkfs.ext4 /dev/sdc1
+                    mount /dev/sdc1 /data2
+                    echo "/dev/sdc1 /data2 ext4 defaults 0 0" >> /etc/fstab
+                fi
+                if [ $line == 'sdd' ]
+                then
+                    mkdir /data3
+                    echo -e "g\nn\np\n1\n\n\nw" | fdisk /dev/sdd
+                    mkfs.ext4 /dev/sdd1
+                    mount /dev/sdd1 /data3
+                    echo "/dev/sdd1 /data3 ext4 defaults 0 0" >> /etc/fstab
+                fi
+                if [ $line == 'sde' ]
+                then
+                    mkdir /data4
+                    echo -e "g\nn\np\n1\n\n\nw" | fdisk /dev/sde
+                    mkfs.ext4 /dev/sde1
+                    mount /dev/sde1 /data4
+                    echo "/dev/sde1 /data4 ext4 defaults 0 0" >> /etc/fstab
+                fi
+                if [ $line == 'sdf' ]
+                then
+                    mkdir /data5
+                    echo -e "g\nn\np\n1\n\n\nw" | fdisk /dev/sdf
+                    mkfs.ext4 /dev/sdf1
+                    mount /dev/sdf1 /data5
+                    echo "/dev/sdf1 /data5 ext4 defaults 0 0" >> /etc/fstab
+                fi
+            done
+        - path: /etc/netplan/99-installer-config.yaml
+          content: |
+            network:
+              version: 2
+              renderer: networkd
+              ethernets:
+                ens160:
+                  addresses:
+                    - ${resource.Server_Machine.networks[0].address}/${resource.Server_Network.prefixLength}
+                  gateway4: ${resource.Server_Network.gateway}
+                  nameservers:
+                    search: ${resource.Server_Network.dnsSearchDomains}
+                    addresses: ${resource.Server_Network.dns}
+        users:
+          - name: ${input.username}
+            lock_passwd: false
+            sudo: ['ALL=(ALL) NOPASSWD:ALL']
+            groups: [sudo, admin]
+            shell: '/bin/bash'
+            ssh_pwauth: yes
+        chpasswd:
+          list: |
+            ${input.username}:${input.userpassword}
+            root:${secret.WindowsServerTemplateAdministratorPassword}
+            pcloudadmin:${secret.WindowsServerTemplateAdministratorPassword}
+          expire: false
+        runcmd:
+          - echo "Defaults:${input.username} !requiretty" >> /etc/sudoers.d/${input.username}
+          - rm -rf /etc/netplan/00-*.yaml
+          - rm -rf /etc/netplan/50-*.yaml
+          - netplan apply
+          - hostnamectl set-hostname ${input.hostname}
+          - timedatectl set-timezone Asia/Ho_Chi_Minh
+          - [ bash, /var/tmp/initdisk.sh ]
+          - touch /etc/cloud/cloud-init.disabled
+          - shutdown -r 1
+      snapshotLimit: 5
+      networks:
+        - network: '${resource.Server_Network.id}'
+          assignment: static
+  Server_Disk1:
+    type: Cloud.vSphere.Disk
+    allocatePerInstance: true
+    properties:
+      unitNumber: 1
+      capacityGb: '${input.disks[0].size}'
+      constraints:
+        - tag: 'site:dc'
+        - tag: 'vcenter:vc01'
+        - tag: 'datastore:3par02_cloud01'
+      count: '${ length(input.disks) >= 1 ? 1 : 0 }'
+      name: 'PCLOUD-${to_upper(input.hostname)}-DISK1'
+      SCSIController: SCSI_Controller_0
+  Server_Disk2:
+    type: Cloud.vSphere.Disk
+    dependsOn:
+      - Server_Disk1
+    allocatePerInstance: true
+    properties:
+      unitNumber: 2
+      SCSIController: SCSI_Controller_0
+      capacityGb: '${input.disks[1].size}'
+      count: '${ length(input.disks) >= 2 ? 1 : 0 }'
+      name: 'PCLOUD-${to_upper(input.hostname)}-DISK2'
+      constraints:
+        - tag: 'site:dc'
+        - tag: 'vcenter:vc01'
+        - tag: 'datastore:3par02_cloud01'
+  Server_Disk3:
+    type: Cloud.vSphere.Disk
+    dependsOn:
+      - Server_Disk2
+    allocatePerInstance: true
+    properties:
+      unitNumber: 3
+      SCSIController: SCSI_Controller_0
+      capacityGb: '${input.disks[2].size}'
+      count: '${ length(input.disks) >= 3 ? 1 : 0 }'
+      name: 'PCLOUD-${to_upper(input.hostname)}-DISK3'
+      constraints:
+        - tag: 'site:dc'
+        - tag: 'vcenter:vc01'
+        - tag: 'datastore:3par02_cloud01'
+  Server_Disk4:
+    type: Cloud.vSphere.Disk
+    dependsOn:
+      - Server_Disk3
+    allocatePerInstance: true
+    properties:
+      unitNumber: 4
+      SCSIController: SCSI_Controller_0
+      capacityGb: '${input.disks[3].size}'
+      count: '${ length(input.disks) >= 4 ? 1 : 0 }'
+      name: 'PCLOUD-${to_upper(input.hostname)}-DISK4'
+      constraints:
+        - tag: 'site:dc'
+        - tag: 'vcenter:vc01'
+        - tag: 'datastore:3par02_cloud01'
+  Server_Disk5:
+    type: Cloud.vSphere.Disk
+    dependsOn:
+      - Server_Disk4
+    allocatePerInstance: true
+    properties:
+      unitNumber: 5
+      SCSIController: SCSI_Controller_0
+      capacityGb: '${input.disks[4].size}'
+      count: '${ length(input.disks) >= 5 ? 1 : 0 }'
+      name: 'PCLOUD-${to_upper(input.hostname)}-DISK5'
+      constraints:
+        - tag: 'site:dc'
+        - tag: 'vcenter:vc01'
+        - tag: 'datastore:3par02_cloud01'
